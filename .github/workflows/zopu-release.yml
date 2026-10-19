@@ -1,0 +1,57 @@
+name: Zopu release
+
+# Zopu's build of the CLI from this fork. Push a tag `zopu-<upstream version>-<n>`
+# (e.g. zopu-0.8.177-1) and this attaches a self-contained CLI tarball to a GitHub
+# Release; Zopu's video-engineer installs it with `npm i -g <asset url>`. The
+# workspace packages are devDependencies bundled by tsup, so the tarball needs
+# nothing from npm's @hyperframes/* scope.
+
+permissions: {}
+
+on:
+  push:
+    tags:
+      - "zopu-*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+
+      - name: Pack the CLI
+        id: pack
+        run: |
+          mkdir -p out
+          (cd packages/cli && bun pm pack --destination ../../out)
+          TGZ="$(ls out/*.tgz)"
+          mv "$TGZ" out/hyperframes-cli.tgz
+          sha256sum out/hyperframes-cli.tgz | tee out/hyperframes-cli.tgz.sha256
+
+      - name: Smoke test the packed CLI
+        run: |
+          npm i -g ./out/hyperframes-cli.tgz
+          hyperframes --version
+          hyperframes doctor --json > /dev/null
+
+      - name: Pack the skills
+        run: tar -czf out/hyperframes-skills.tgz skills registry/examples
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" out/hyperframes-cli.tgz out/hyperframes-cli.tgz.sha256 out/hyperframes-skills.tgz \
+            --title "$TAG" --notes "Zopu build of the HyperFrames CLI at $(git rev-parse --short HEAD)."
